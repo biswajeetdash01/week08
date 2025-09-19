@@ -41,7 +41,7 @@ jobs:
 
 # - name: Attach ACR to AKS
 #   run: |
-#     az aks update --name ${{ github.event.inputs.cluster_name }} --resource-group ${{ github.event.inputs.resource_group }} --attach-acr ${{ github.event.inputs.container_registry }}
+#     az aks update --name ${{ github.event.inputs.cluster_name }} --resource-group ${{ github.event.inputs.resource_group }} --attach-acr ${{ github.event.inputs.container_registry }} 
 
       - name: Deploy Backend Infrastructure (Namespace, ConfigMaps, Secrets, Databases)
         run: |
