@@ -8,13 +8,16 @@ on:
   # Manual trigger
   workflow_dispatch:
 
-  # Automatically on pushes to main branch
   push:
     branches:
       - main
-    paths: # Only trigger if changes are in backend directories
-      - 'backend/**'
-      - '.github/workflows/backend_ci.yml' # Trigger if this workflow file changes
+      - development
+      - 'feature/**'
+  pull_request:
+    branches:
+      - main
+      - development
+
 
 # Define global environment variables that can be used across jobs
 env:
@@ -72,6 +75,11 @@ jobs:
         uses: actions/setup-python@v5 # Action to set up Python environment
         with:
           python-version: '3.10'
+
+      - uses: actions/cache@v3
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
 
       # 3. Install dependencies and run code quality checks
       - name: Install dependencies
@@ -131,16 +139,17 @@ jobs:
     # Build and Push Docker image for Product Service
     - name: Build and Push Product Service Image
       run: |
-        docker build -t ${{ env.ACR_LOGIN_SERVER }}/product_service:latest ./backend/product_service/
-        docker push ${{ env.ACR_LOGIN_SERVER }}/product_service:latest
+        docker build -t ${{ env.ACR_LOGIN_SERVER }}/product_service:${{ github.sha }}-${{ github.run_id }} ./backend/product_service/
+        docker push ${{ env.ACR_LOGIN_SERVER }}/product_service:${{ github.sha }}-${{ github.run_id }}
 
     # Build and Push Docker image for Order Service
     - name: Build and Push Order Service Image
       run: |
-        docker build -t ${{ env.ACR_LOGIN_SERVER }}/order_service:latest ./backend/order_service/
-        docker push ${{ env.ACR_LOGIN_SERVER }}/order_service:latest
+        docker build -t ${{ env.ACR_LOGIN_SERVER }}/order_service:${{ github.sha }}-${{ github.run_id }} ./backend/order_service/
+        docker push ${{ env.ACR_LOGIN_SERVER }}/order_service:${{ github.sha }}-${{ github.run_id }}
 
     # Logout from Azure for security (runs even if image push fails)
     - name: Logout from Azure
-      run: az logout
       if: always()
+      run: az logout
+
