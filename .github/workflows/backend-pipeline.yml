@@ -17,10 +17,9 @@ env:
   PYTHON_VERSION: '3.10'
 
 jobs:
-  # Stage 1: Testing
+  # Stage 1: Test backend services
   test-backend:
     runs-on: ubuntu-latest
-    
     services:
       product_db:
         image: postgres:15
@@ -89,12 +88,12 @@ jobs:
           POSTGRES_PASSWORD: postgres
         run: pytest tests --maxfail=1 --disable-warnings -v
 
-  # Stage 2: Build (only on develop/main)
+  # Stage 2: Build and push Docker images
   build-backend:
     needs: test-backend
     runs-on: ubuntu-latest
     if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop'
-    
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -105,22 +104,20 @@ jobs:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
 
       - name: Login to Azure Container Registry
-        run: az acr login --name ${{ env.ACR_LOGIN_SERVER }}
-
-      - name: Build and Push Images
         run: |
-          # Build with environment-specific tags
+          echo ${{ secrets.ACR_PASSWORD }} | docker login ${{ secrets.ACR_LOGIN_SERVER }} -u ${{ secrets.ACR_USERNAME }} --password-stdin
+
+      - name: Build and Push Docker Images
+        run: |
           if [[ "${{ github.ref }}" == "refs/heads/main" ]]; then
             TAG="prod-${{ env.IMAGE_TAG }}"
           else
             TAG="staging-${{ env.IMAGE_TAG }}"
           fi
-          
-          # Product Service
+
           docker build -t ${{ env.ACR_LOGIN_SERVER }}/product_service:$TAG ./backend/product_service/
           docker push ${{ env.ACR_LOGIN_SERVER }}/product_service:$TAG
-          
-          # Order Service
+
           docker build -t ${{ env.ACR_LOGIN_SERVER }}/order_service:$TAG ./backend/order_service/
           docker push ${{ env.ACR_LOGIN_SERVER }}/order_service:$TAG
 
@@ -128,13 +125,13 @@ jobs:
         run: az logout
         if: always()
 
-  # Stage 3: Deploy to Staging
-  deploy-staging:
+  # Stage 3: Deploy to AKS
+  deploy-backend:
     needs: build-backend
     runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/develop'
-    environment: staging
-    
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop'
+    environment: ${{ github.ref == 'refs/heads/main' && 'production' || 'staging' }}
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -147,17 +144,22 @@ jobs:
       - name: Set AKS Context
         run: |
           az aks get-credentials \
-            --resource-group ${{ secrets.STAGING_RESOURCE_GROUP }} \
-            --name ${{ secrets.STAGING_AKS_CLUSTER }} \
+            --resource-group ${{ secrets.RESOURCE_GROUP }} \
+            --name ${{ secrets.CLUSTER_NAME }} \
             --overwrite-existing
 
-      - name: Deploy to Staging
+      - name: Deploy backend to AKS
         run: |
           cd k8s/
-          # Update image tags for staging
-          sed -i "s|latest|staging-${{ env.IMAGE_TAG }}|g" product-service.yaml
-          sed -i "s|latest|staging-${{ env.IMAGE_TAG }}|g" order-service.yaml
-          
+          if [[ "${{ github.ref }}" == "refs/heads/main" ]]; then
+            TAG="prod-${{ env.IMAGE_TAG }}"
+          else
+            TAG="staging-${{ env.IMAGE_TAG }}"
+          fi
+
+          sed -i "s|latest|$TAG|g" product-service.yaml
+          sed -i "s|latest|$TAG|g" order-service.yaml
+
           kubectl apply -f configmaps.yaml
           kubectl apply -f secrets.yaml
           kubectl apply -f product-db.yaml
@@ -165,55 +167,12 @@ jobs:
           kubectl apply -f product-service.yaml
           kubectl apply -f order-service.yaml
 
-      - name: Logout from Azure
-        run: az logout
-        if: always()
-
-  # Stage 4: Deploy to Production
-  deploy-production:
-    needs: build-backend
-    runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/main'
-    environment: production
-    
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Azure Login
-        uses: azure/login@v1
-        with:
-          creds: ${{ secrets.AZURE_CREDENTIALS }}
-
-      - name: Set AKS Context
-        run: |
-          az aks get-credentials \
-            --resource-group ${{ secrets.PRODUCTION_RESOURCE_GROUP }} \
-            --name ${{ secrets.PRODUCTION_AKS_CLUSTER }} \
-            --overwrite-existing
-
-      - name: Deploy to Production
-        run: |
-          cd k8s/
-          # Update image tags for production
-          sed -i "s|latest|prod-${{ env.IMAGE_TAG }}|g" product-service.yaml
-          sed -i "s|latest|prod-${{ env.IMAGE_TAG }}|g" order-service.yaml
-          
-          kubectl apply -f configmaps.yaml
-          kubectl apply -f secrets.yaml
-          kubectl apply -f product-db.yaml
-          kubectl apply -f order-db.yaml
-          kubectl apply -f product-service.yaml
-          kubectl apply -f order-service.yaml
-
-      - name: Get Service IPs
+      - name: Get Backend Service IPs
         id: get-ips
         run: |
-          # Wait for LoadBalancer IPs
           for i in {1..60}; do
-            PRODUCT_IP=$(kubectl get service product-service-w08e1 -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
-            ORDER_IP=$(kubectl get service order-service-w08e1 -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
-            
+            PRODUCT_IP=$(kubectl get svc product-service-w08e1 -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
+            ORDER_IP=$(kubectl get svc order-service-w08e1 -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
             if [[ -n "$PRODUCT_IP" && -n "$ORDER_IP" ]]; then
               echo "product_ip=$PRODUCT_IP" >> $GITHUB_OUTPUT
               echo "order_ip=$ORDER_IP" >> $GITHUB_OUTPUT
@@ -225,7 +184,7 @@ jobs:
       - name: Logout from Azure
         run: az logout
         if: always()
-    
+
     outputs:
       product_ip: ${{ steps.get-ips.outputs.product_ip }}
       order_ip: ${{ steps.get-ips.outputs.order_ip }}

@@ -12,10 +12,9 @@ jobs:
     uses: ./.github/workflows/backend-pipeline.yml
     secrets: inherit
 
-  # Frontend Pipeline (depends on backend for API IPs in production)
+  # Frontend Pipeline (depends on backend for API IPs)
   frontend-pipeline:
     needs: backend-pipeline
-    if: always() && (needs.backend-pipeline.result == 'success' || needs.backend-pipeline.result == 'skipped')
     uses: ./.github/workflows/frontend-pipeline.yml
     secrets: inherit
     with:
@@ -28,7 +27,6 @@ jobs:
     needs: [backend-pipeline, frontend-pipeline]
     runs-on: ubuntu-latest
     if: always()
-    
     steps:
       - name: Notify Pipeline Status
         run: |
@@ -37,4 +35,3 @@ jobs:
           else
             echo "❌ Pipeline failed. Backend: ${{ needs.backend-pipeline.result }}, Frontend: ${{ needs.frontend-pipeline.result }}"
             exit 1
-          fi
