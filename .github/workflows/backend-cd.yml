@@ -14,7 +14,7 @@ on:
       aks_acr_name:
         description: 'Name of ACR'
         required: true
-        default: 'biswasacr722'
+        default: 'ishikaacr'
 
 jobs:
   deploy_backend:
